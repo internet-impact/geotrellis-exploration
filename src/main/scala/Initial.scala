@@ -33,7 +33,6 @@ object Initial {
 
     val mobile = ShapeFileReader.readMultiPolygonFeatures(input)
 
-
     println("combining mobile data.")
 
     // we throw out metadata for mobile, then union all the pieces together
@@ -60,29 +59,50 @@ object Initial {
 
     // println("Writing to csv: ")
     // val writer = CSVWriter.open(new File(out))
-    // writer.writeRow(dat(0).keys.toSeq)
+p    // writer.writeRow(dat(0).keys.toSeq)
     // writer.writeAll(dat.map(_.toSeq.map(_._2)))
     // writer.close()
 
     val conf = new SparkConf().setAppName("Initial")
     val sc = new SparkContext(conf)
 
-    val mobilesR = mobile.map(m => vector2raster(m, 1000, 1000))
+    val mobilesR = mobile.map(m => vec2tile(m, 1000, 1000))
     val mobilesRDD = sc.parallelize(mobilesR)
 
     val crs = CRS.fromEpsgCode(4326)
     val bounds = KeyBounds(SpatialKey(1,1), SpatialKey(10, 10))
     val extent = mobileCombined.envelope
-    val layout = new LayoutDefinition(extent, new TileLayout(layoutCols= 10, layoutRows = 10, tileCols = 1000, tileRows = 1000))
+    val layout = new TileLayout(layoutCols= 10, layoutRows = 10, tileCols = 1000, tileRows = 1000)
+    val layoutDef = new LayoutDefinition(extent, layout)
     val cellType = IntConstantNoDataCellType
-    val layerMetadata = new TileLayerMetadata[SpatialKey](cellType, layout, extent, crs, bounds)
+    val layerMetadata = new TileLayerMetadata[SpatialKey](cellType, layoutDef, extent, crs, bounds)
 
+    // creating an RDD from mobile!
+    import geotrellis.spark.SpatialKey._
+    val fullMobileTile = vec2tile(mobileCombined, 1000, 1000)
+    val rdd = sc.parallelize(Seq((ProjectedExtent(extent, crs), fullMobileTile)))
+    val layoutScheme = ZoomedLayoutScheme(crs)
+    val md = rdd.collectMetadata(layoutScheme)
+    val fullMobileRDD = ContextRDD(rdd.tileToLayout[SpatialKey](md._2), md)
+
+    // both??
+    val fullExtent = econ.extent.expandToInclude(mobile.extent)
   }
 
+  // creating layout extent
+  implicit class getFullExtent[T <: Geometry](underlying:Seq[Feature[T, Any]]) {
+    def extent = {
+      underlying.map(_.envelope).reduce(_.expandToInclude(_))
+    }
+  }
 
-  def vector2raster(vec: Geometry, cols:Int, rows:Int, value:Int = 1) : Raster[Tile] =  {
+  def vec2tile(vec:Geometry, cols:Int, rows:Int, value:Int = 1) : Tile = {
     val re = RasterExtent(vec.envelope, cols = cols, rows = rows)
-    val tile = Rasterizer.rasterizeWithValue(vec, re, value)
+    Rasterizer.rasterizeWithValue(vec, re, value)
+  }
+
+  def vector2raster(vec:Geometry, cols:Int, rows:Int, value:Int = 1) : Raster[Tile] =  {
+    val tile = vec2tile(vec, cols, rows, value)
     Raster(tile, vec.envelope)
   }
 
@@ -99,7 +119,7 @@ object Initial {
 
   // val t = sc.textFile("../data/2009/Data/3G/Global_3G_2009Q1.prj")
   // val prjString = t.take(1)(0)
-m
+
   // val lilEconR = vector2raster(lilEcon(1), 1000, 1000)
   // import geotrellis.raster.render._
 
